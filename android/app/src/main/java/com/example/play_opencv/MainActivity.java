@@ -17,6 +17,7 @@ import android.content.pm.PackageManager;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
@@ -32,12 +33,9 @@ import android.os.HandlerThread;
 import android.util.Log;
 import android.view.Surface;
 import android.view.TextureView;
-import android.view.View;
-import android.widget.Button;
 
 import com.example.play_opencv.databinding.ActivityMainBinding;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 
@@ -49,6 +47,7 @@ public class MainActivity extends AppCompatActivity {
     private CameraDevice.StateCallback cameraDeviceStateCallback;
     private CameraCaptureSession.StateCallback cameraCaptureSessionStateCallback;
     private CameraCaptureSession.CaptureCallback cameraCaptureSessionCaptureCallback;
+    private ImageReader.OnImageAvailableListener imageReaderOnImageAvailableListener;
     private CameraDevice cameraDevice;
 
     private HandlerThread cameraBackgroundThread;
@@ -57,6 +56,10 @@ public class MainActivity extends AppCompatActivity {
     private CameraCaptureSession cameraCaptureSession;
     private CaptureRequest previewRequest;
     private CaptureRequest.Builder previewRequestBuilder;
+
+    private ImageReader imageReader;
+    private ImageReader previewImageReader;
+    private android.util.Size previewSize;
 
 
     // Used to load the 'play_opencv' library on application startup.
@@ -74,6 +77,33 @@ public class MainActivity extends AppCompatActivity {
         CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         String firstCameraId = cameraManager.getCameraIdList()[0];
 
+        // Get camera characteristics to find supported YUV sizes
+        CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(firstCameraId);
+        android.hardware.camera2.params.StreamConfigurationMap map = characteristics.get(
+                CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+
+        // For still image captures, we use the largest available size.
+        assert map != null;
+        android.util.Size[] yuvSizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888);
+        if (yuvSizes != null && yuvSizes.length > 0) {
+            android.util.Size yuvSize = yuvSizes[0]; // Using the first (often largest)
+            imageReader = ImageReader.newInstance(
+                    yuvSize.getWidth(),
+                    yuvSize.getHeight(),
+                    android.graphics.ImageFormat.YUV_420_888,
+                    2 // maxImages
+            );
+            // Set the listener, running on our background handler
+            imageReader.setOnImageAvailableListener(
+                    imageReaderOnImageAvailableListener,
+                    cameraBackgroundHandler
+            );
+        } else {
+            Log.e(TAG, "No YUV output sizes supported");
+            return;
+        }
+
+        // Use a real executor
         Executor executor = (command) -> cameraBackgroundHandler.post(command);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -219,10 +249,28 @@ public class MainActivity extends AppCompatActivity {
         };
 
         // This is where you would handle a captured image
-        ImageReader.OnImageAvailableListener imageReaderOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
-            @Override
-            public void onImageAvailable(ImageReader reader) {
-                // This is where you would handle a captured image
+        imageReaderOnImageAvailableListener = reader -> {
+            // Get the latest frame
+            android.media.Image image = reader.acquireLatestImage();
+            if (image == null) {
+                return;
+            }
+
+            // Get the Surface to draw on from our TextureView
+            if (surfaceTexture != null) {
+                Surface surface = new Surface(surfaceTexture);
+
+                // Call the native function to process and draw
+                processFrame(image, surface);
+
+                // After this, the C++ code is responsible for drawing to the Surface.
+                // We must close the image to let the next frame in.
+                image.close();
+
+                // Clean up the Surface object
+                surface.release();
+            } else {
+                image.close();
             }
         };
     }
@@ -291,25 +339,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void createCameraPreviewSession() throws CameraAccessException {
-        if (surfaceTexture == null) {
-            Log.e(TAG, "SurfaceTexture is null, cannot create session");
-            return;
-        }
-        if (cameraDevice == null) {
-            Log.e(TAG, "CameraDevice is null, cannot create session");
-            return;
-        }
-
+        // ... (checks for surfaceTexture and cameraDevice) ...
         Surface surface = new Surface(surfaceTexture);
+        Surface imageReaderSurface = imageReader.getSurface(); // <-- GET IMAGEREADER SURFACE
 
         // Build the preview request
         previewRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
         previewRequestBuilder.addTarget(surface); // Add the TextureView's surface as a target
+        previewRequestBuilder.addTarget(imageReaderSurface);
 
-        // Create the session
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             List<OutputConfiguration> outputConfigs =
-                    Collections.singletonList(new OutputConfiguration(surface));
+                    java.util.Arrays.asList(
+                            new OutputConfiguration(surface),
+                            new OutputConfiguration(imageReaderSurface) // <-- ADD THIS
+                    );
 
             Executor executor = (command) -> cameraBackgroundHandler.post(command);
 
@@ -323,7 +367,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             // Deprecated version for < API 28
             cameraDevice.createCaptureSession(
-                    Collections.singletonList(surface),
+                    java.util.Arrays.asList(surface, imageReaderSurface), // <-- ADD IMAGEREADER SURFACE
                     cameraCaptureSessionStateCallback,
                     cameraBackgroundHandler
             );
@@ -357,4 +401,6 @@ public class MainActivity extends AppCompatActivity {
      * which is packaged with this application.
      */
     public native String stringFromJNI();
+
+    public native void processFrame(android.media.Image image, Surface surface);
 }
