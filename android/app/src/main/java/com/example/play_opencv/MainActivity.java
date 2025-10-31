@@ -58,8 +58,8 @@ public class MainActivity extends AppCompatActivity {
     private CaptureRequest.Builder previewRequestBuilder;
 
     private ImageReader imageReader;
-    private ImageReader previewImageReader;
-    private android.util.Size previewSize;
+    // private ImageReader previewImageReader; // <-- REMOVED (Unused)
+    private android.util.Size previewSize;     // <-- KEPT (This is now used)
 
 
     // Used to load the 'play_opencv' library on application startup.
@@ -84,24 +84,31 @@ public class MainActivity extends AppCompatActivity {
 
         // For still image captures, we use the largest available size.
         assert map != null;
-        android.util.Size[] yuvSizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888);
-        if (yuvSizes != null && yuvSizes.length > 0) {
-            android.util.Size yuvSize = yuvSizes[0]; // Using the first (often largest)
-            imageReader = ImageReader.newInstance(
-                    yuvSize.getWidth(),
-                    yuvSize.getHeight(),
-                    android.graphics.ImageFormat.YUV_420_888,
-                    2 // maxImages
-            );
-            // Set the listener, running on our background handler
-            imageReader.setOnImageAvailableListener(
-                    imageReaderOnImageAvailableListener,
-                    cameraBackgroundHandler
-            );
-        } else {
-            Log.e(TAG, "No YUV output sizes supported");
+
+        // --- START: MODIFIED BLOCK ---
+        // Ensure previewSize is set before we use it
+        if (previewSize == null) {
+            Log.e(TAG, "previewSize was not set (e.g., in onSurfaceTextureAvailable)");
             return;
         }
+
+        Log.i(TAG, "Using preview size: " + previewSize.getWidth() + "x" + previewSize.getHeight());
+
+        // Create the ImageReader with the TextureView's size
+        imageReader = ImageReader.newInstance(
+                previewSize.getWidth(),
+                previewSize.getHeight(),
+                android.graphics.ImageFormat.YUV_420_888,
+                2 // maxImages
+        );
+        // --- END: MODIFIED BLOCK ---
+
+        // Set the listener, running on our background handler
+        imageReader.setOnImageAvailableListener(
+                imageReaderOnImageAvailableListener,
+                cameraBackgroundHandler
+        );
+
 
         // Use a real executor
         Executor executor = (command) -> cameraBackgroundHandler.post(command);
@@ -130,6 +137,10 @@ public class MainActivity extends AppCompatActivity {
                 // Store the texture and set its size
                 surfaceTexture = surface;
                 surface.setDefaultBufferSize(width, height);
+
+                // --- ADDED THIS LINE ---
+                // Store the dimensions for the ImageReader
+                previewSize = new android.util.Size(width, height);
 
                 Context context = imageView.getContext();
 
@@ -162,6 +173,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
                 // Can be used to reconfigure preview size if needed
+                // For simplicity, we assume fixed size for this example
             }
 
             @Override
@@ -290,7 +302,13 @@ public class MainActivity extends AppCompatActivity {
                 // We need to re-check permission here for the onResume case
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                         == PackageManager.PERMISSION_GRANTED) {
+
                     surfaceTexture = imageView.getSurfaceTexture(); // Get the existing texture
+
+                    // --- ADDED THIS LINE ---
+                    // Re-initialize previewSize in case it was lost
+                    previewSize = new android.util.Size(imageView.getWidth(), imageView.getHeight());
+
                     openCamera(imageView.getWidth(), imageView.getHeight());
                 }
                 // If permission is not granted, the listener will handle it
@@ -314,6 +332,7 @@ public class MainActivity extends AppCompatActivity {
         cameraBackgroundHandler = new Handler(cameraBackgroundThread.getLooper());
     }
 
+
     private void stopBackgroundThread() {
         if (cameraBackgroundThread != null) {
             cameraBackgroundThread.quitSafely();
@@ -336,23 +355,34 @@ public class MainActivity extends AppCompatActivity {
             cameraDevice.close();
             cameraDevice = null;
         }
+        // Also close the ImageReader
+        if (imageReader != null) {
+            imageReader.close();
+            imageReader = null;
+        }
     }
 
     private void createCameraPreviewSession() throws CameraAccessException {
-        // ... (checks for surfaceTexture and cameraDevice) ...
-        Surface surface = new Surface(surfaceTexture);
+        // This function MUST have an initialized imageReader and cameraDevice
+        if (imageReader == null || cameraDevice == null) {
+            Log.e(TAG, "createCameraPreviewSession: imageReader or cameraDevice is null");
+            return;
+        }
+
         Surface imageReaderSurface = imageReader.getSurface(); // <-- GET IMAGEREADER SURFACE
 
         // Build the preview request
         previewRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-        previewRequestBuilder.addTarget(surface); // Add the TextureView's surface as a target
+
+        // --- THIS IS THE KEY ---
+        // The ONLY target is the ImageReader surface.
+        // The C++ code will handle drawing to the TextureView surface.
         previewRequestBuilder.addTarget(imageReaderSurface);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             List<OutputConfiguration> outputConfigs =
                     java.util.Arrays.asList(
-                            new OutputConfiguration(surface),
-                            new OutputConfiguration(imageReaderSurface) // <-- ADD THIS
+                            new OutputConfiguration(imageReaderSurface) // <-- ONLY output
                     );
 
             Executor executor = (command) -> cameraBackgroundHandler.post(command);
@@ -367,7 +397,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             // Deprecated version for < API 28
             cameraDevice.createCaptureSession(
-                    java.util.Arrays.asList(surface, imageReaderSurface), // <-- ADD IMAGEREADER SURFACE
+                    java.util.Arrays.asList(imageReaderSurface), // <-- ONLY output
                     cameraCaptureSessionStateCallback,
                     cameraBackgroundHandler
             );
@@ -383,7 +413,13 @@ public class MainActivity extends AppCompatActivity {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 // Permission was granted, open the camera
                 try {
-                    openCamera(imageView.getWidth(), imageView.getHeight());
+                    // Need to set previewSize here too, as onSurfaceTextureAvailable
+                    // might have already run.
+                    if (imageView.isAvailable()) {
+                        previewSize = new android.util.Size(imageView.getWidth(), imageView.getHeight());
+                        openCamera(imageView.getWidth(), imageView.getHeight());
+                    }
+                    // If not available, onSurfaceTextureAvailable will handle it.
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
