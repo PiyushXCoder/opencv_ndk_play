@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">play-opencv</string>
+    <string name="take_picture">Take Picture</string>
 </resources>
