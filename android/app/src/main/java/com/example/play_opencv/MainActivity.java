@@ -49,8 +49,6 @@ public class MainActivity extends AppCompatActivity {
     private CameraDevice.StateCallback cameraDeviceStateCallback;
     private CameraCaptureSession.StateCallback cameraCaptureSessionStateCallback;
     private CameraCaptureSession.CaptureCallback cameraCaptureSessionCaptureCallback;
-    private ImageReader.OnImageAvailableListener imageReaderOnImageAvailableListener;
-    private CameraManager cameraManager;
     private CameraDevice cameraDevice;
 
     private HandlerThread cameraBackgroundThread;
@@ -66,8 +64,6 @@ public class MainActivity extends AppCompatActivity {
         System.loadLibrary("play_opencv");
     }
 
-    private ActivityMainBinding binding;
-
     @RequiresPermission(Manifest.permission.CAMERA)
     private void openCamera(int width, int height) throws Exception {
         if (cameraBackgroundHandler == null) {
@@ -75,7 +71,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+        CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         String firstCameraId = cameraManager.getCameraIdList()[0];
 
         Executor executor = (command) -> cameraBackgroundHandler.post(command);
@@ -92,7 +88,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        binding = ActivityMainBinding.inflate(getLayoutInflater());
+        ActivityMainBinding binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
         imageView = binding.imageView;
@@ -222,7 +218,8 @@ public class MainActivity extends AppCompatActivity {
             }
         };
 
-        imageReaderOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
+        // This is where you would handle a captured image
+        ImageReader.OnImageAvailableListener imageReaderOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(ImageReader reader) {
                 // This is where you would handle a captured image
