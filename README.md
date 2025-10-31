@@ -28,3 +28,25 @@ Even if I got it working I didn't knew how do I send image to c++, like its an o
 Well some how I have written the code for opencv. 
 
 One of the thing which still confused me is why opencv is responsible to draw. I need more time to tinker. 
+
+
+
+## What is missing?
+
+Web, I want to include a video stream to web browser, but, pulling this will require me time to understand how do I add something like webrtc in android. 
+
+## Architecture
+
+It is a 2 file thing, I open camera, image in form of surface, send it to opencv, and opencv draws it. 
+
+If android was not involved, I might have a better explanantion.
+
+## How to setup?
+
+I just copy paste whole NDK. Repository is very big because of it. 
+
+It is very primitive way of doing it. But it works. I wish I could have used something like vcpkg. But not sure if its available for android. 
+
+## Running?
+
+Simply build and run using android sdk. It is a gradle project so you can use gradle commads too.
